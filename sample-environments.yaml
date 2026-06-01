@@ -71,3 +71,18 @@ data:
     [
       {"name": "MCP_URL", "value": "http://image-tool:8000/mcp"}
     ]
+  # llm-d on-cluster inference gateway. Each prestaged model is reachable via a
+  # path-prefix on the same gateway service. Switch LLM_MODEL and the path-prefix in
+  # LLM_API_BASE together. See a2a/kagenti_chat/README.md for the model table.
+  llm-d: |
+    [
+      {"name": "LLM_API_KEY", "value": "dummy"},
+      {"name": "LLM_API_BASE", "value": "http://infra-inference-scheduling-inference-gateway-istio.llm-d.svc/meta-llama-llama-3-3-70b-instruct/v1"},
+      {"name": "LLM_MODEL", "value": "meta-llama/Llama-3.3-70B-Instruct"}
+    ]
+  llm-d-small: |
+    [
+      {"name": "LLM_API_KEY", "value": "dummy"},
+      {"name": "LLM_API_BASE", "value": "http://infra-inference-scheduling-inference-gateway-istio.llm-d.svc/meta-llama-llama-3-1-8b-instruct/v1"},
+      {"name": "LLM_MODEL", "value": "meta-llama/Llama-3.1-8B-Instruct"}
+    ]

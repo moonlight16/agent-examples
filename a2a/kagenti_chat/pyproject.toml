@@ -1,0 +1,32 @@
+[project]
+name = "kagenti-chat"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "A general-purpose AG2 chat agent exposed via A2A, designed for the Kagenti platform"
+dependencies = [
+    "python-dotenv>=1.1.0",
+    "a2a-sdk[http-server]>=0.3.22,<1.0",
+    "ag2[openai,tracing]>=0.12.3",
+    "httpx>=0.28.1",
+    "pydantic>=2.10.6",
+    "pydantic-settings>=2.14.1",
+    "uvicorn>=0.46.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[project.scripts]
+server = "kagenti_chat.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
