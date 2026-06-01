@@ -3,7 +3,7 @@ ARG RELEASE_VERSION="main"
 
 WORKDIR /app
 COPY . .
-RUN uv sync --no-cache --locked --link-mode copy
+RUN uv sync --no-cache --link-mode copy
 
 ENV PRODUCTION_MODE=True \
     HOME=/app \
