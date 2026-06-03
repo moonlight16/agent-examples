@@ -48,6 +48,12 @@ spec:
               value: "meta-llama/Llama-3.3-70B-Instruct"
             - name: LLM_TEMPERATURE
               value: "0.2"
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kagenti-chat-api-key
+                  key: api-key
+                  optional: true
           resources:
             requests:
               cpu: "500m"

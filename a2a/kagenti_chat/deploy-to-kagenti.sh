@@ -23,6 +23,20 @@ echo "==> Deploying ${AGENT_NAME} to namespace ${NAMESPACE}"
 # Ensure namespace has label for shared gateway access
 kubectl label namespace ${NAMESPACE} shared-gateway-access=true --overwrite
 
+# Generate API key if the secret doesn't already exist
+if ! kubectl -n ${NAMESPACE} get secret kagenti-chat-api-key >/dev/null 2>&1; then
+  GENERATED_KEY=$(openssl rand -hex 32)
+  kubectl -n ${NAMESPACE} create secret generic kagenti-chat-api-key \
+    --from-literal=api-key="${GENERATED_KEY}"
+  echo ""
+  echo "==> Generated API key (save this — it won't be shown again):"
+  echo "    ${GENERATED_KEY}"
+  echo ""
+  echo "    Pass to clients via: --api-key ${GENERATED_KEY}"
+  echo "    Or env var:          export KAGENTI_CHAT_API_KEY=${GENERATED_KEY}"
+  echo ""
+fi
+
 # 1. Create/update Build using buildah-insecure-direct strategy
 echo "==> Creating Build..."
 kubectl apply -f - <<EOF
@@ -129,6 +143,12 @@ spec:
               value: "meta-llama/Llama-3.3-70B-Instruct"
             - name: LLM_TEMPERATURE
               value: "0.2"
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kagenti-chat-api-key
+                  key: api-key
+                  optional: true
           resources:
             requests:
               cpu: "500m"
