@@ -71,14 +71,17 @@ def append_history(record: dict) -> None:
 
 async def fetch_agent_card(client: httpx.AsyncClient, url: str) -> dict:
     """Try the modern path first, fall back to the deprecated one."""
+    last_error: Exception | None = None
     for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
         try:
             r = await client.get(f"{url}{path}", timeout=10.0)
             if r.status_code == 200:
                 return r.json()
-        except httpx.HTTPError:
+            last_error = RuntimeError(f"HTTP {r.status_code}")
+        except httpx.HTTPError as e:
+            last_error = e
             continue
-    raise RuntimeError(f"Could not fetch agent card from {url}")
+    raise RuntimeError(f"Could not fetch agent card from {url}: {last_error}")
 
 
 def extract_text_from_part(part: dict) -> str:
@@ -242,14 +245,34 @@ async def chat_loop(url: str, insecure: bool, no_stream: bool) -> int:
     verify = not insecure
     timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
 
-    async with httpx.AsyncClient(verify=verify, timeout=timeout, follow_redirects=True) as client:
+    async def _connect(verify_value: bool) -> tuple[httpx.AsyncClient, dict]:
+        c = httpx.AsyncClient(verify=verify_value, timeout=timeout, follow_redirects=True)
         try:
-            with console.status("[dim]Connecting...[/]", spinner="dots"):
-                card = await fetch_agent_card(client, url)
-        except Exception as e:
-            console.print(f"[red]Failed to connect to {url}: {e}[/]")
-            return 1
+            card = await fetch_agent_card(c, url)
+            return c, card
+        except Exception:
+            await c.aclose()
+            raise
 
+    try:
+        with console.status("[dim]Connecting...[/]", spinner="dots"):
+            try:
+                client, card = await _connect(verify)
+            except (httpx.ConnectError, RuntimeError) as e:
+                # Auto-retry with TLS verification disabled on cert errors.
+                # Self-signed sslip.io clusters are common.
+                msg = str(e).lower()
+                if verify and ("ssl" in msg or "certificate" in msg or "self-signed" in msg or "self signed" in msg):
+                    console.print("[yellow]TLS cert not trusted; retrying with --insecure[/]")
+                    client, card = await _connect(False)
+                else:
+                    raise
+    except Exception as e:
+        console.print(f"[red]Failed to connect to {url}: {e}[/]")
+        console.print(f"[dim]If the server uses a self-signed cert, retry with: kagenti-chat --insecure[/]")
+        return 1
+
+    try:
         agent_name = card.get("name", "Agent")
         # Try to find model in description or skills (best effort)
         model = None
@@ -343,6 +366,8 @@ async def chat_loop(url: str, insecure: bool, no_stream: bool) -> int:
 
             conversation.append({"role": "agent", "text": text})
             append_history({"role": "agent", "text": text, "context_id": context_id})
+    finally:
+        await client.aclose()
 
 
 def main() -> None:
