@@ -187,6 +187,32 @@ KAGENTI_CHAT_URL=http://localhost:8000 uv run kagenti-chat
 | `--url URL`      | Agent endpoint (default: deployed cluster URL)  |
 | `--insecure`/`-k`| Skip TLS cert verification (self-signed certs)  |
 | `--no-stream`    | Disable streaming responses                     |
+| `--api-key KEY`  | Bearer token (env: `KAGENTI_CHAT_API_KEY`)      |
+
+## Authentication
+
+When deployed to Kagenti, the agent requires a bearer token on all JSON-RPC requests.
+The deploy script generates a random key on first run and stores it in a Kubernetes
+Secret. Subsequent deploys reuse the existing Secret.
+
+To get the current key from the cluster:
+
+```bash
+kubectl -n team1 get secret kagenti-chat-api-key -o jsonpath='{.data.api-key}' | base64 -d
+```
+
+To rotate the key, delete the Secret and rerun `deploy-to-kagenti.sh` — it will generate
+a new one. Existing pods need to be restarted to pick up the new value:
+
+```bash
+kubectl -n team1 delete secret kagenti-chat-api-key
+kubectl -n team1 rollout restart deployment/kagenti-chat
+./deploy-to-kagenti.sh
+```
+
+If `API_KEY` is not set on the agent, authentication is disabled and the server logs a
+warning at startup. The `/.well-known/agent.json` and `/.well-known/agent-card.json`
+paths are always public so clients can discover the agent before authenticating.
 
 ## Tracing
 
