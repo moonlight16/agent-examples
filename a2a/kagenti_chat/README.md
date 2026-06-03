@@ -150,6 +150,44 @@ You can also deploy via the Kagenti UI under "Import New Agent". Select the `llm
 block from `sample-environments.yaml` and customize `LLM_MODEL` + `LLM_API_BASE` for the
 model you want this agent to use. Set `A2A_PUBLIC_URL` to the externally-reachable URL.
 
+## CLI client
+
+A Claude/Codex-style CLI lets you (and remote colleagues) chat with the deployed agent
+from any laptop with Python 3.12+.
+
+### Install and run
+
+```bash
+git clone https://github.com/moonlight16/agent-examples.git
+cd agent-examples/a2a/kagenti_chat
+uv sync
+uv run kagenti-chat
+```
+
+The default endpoint is the deployed cluster URL. Override with `--url` or
+`KAGENTI_CHAT_URL`:
+
+```bash
+uv run kagenti-chat --url https://kagenti-chat.163-75-85-180.sslip.io
+KAGENTI_CHAT_URL=http://localhost:8000 uv run kagenti-chat
+```
+
+### Features
+
+- **Streaming responses** — agent output appears as it's generated.
+- **Markdown rendering** — code blocks, lists, headers all rendered with Rich.
+- **Conversation history** — chat history persisted at `~/.kagenti-chat/history.jsonl`,
+  input history at `~/.kagenti-chat/input_history`.
+- **Slash commands** — `/help`, `/clear`, `/save`, `/info`, `/exit`.
+
+### Common flags
+
+| Flag             | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `--url URL`      | Agent endpoint (default: deployed cluster URL)  |
+| `--insecure`/`-k`| Skip TLS cert verification (self-signed certs)  |
+| `--no-stream`    | Disable streaming responses                     |
+
 ## Tracing
 
 If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, AG2 LLM/agent spans go there.
