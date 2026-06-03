@@ -77,11 +77,78 @@ prefix in `LLM_API_BASE` together — both must change.
 
 ## Deploying to Kagenti
 
-1. Build/push an image (the existing repo CI / Kagenti UI handles this).
-2. In the Kagenti UI under "Import New Agent", select the `llm-d` env block from
-   `sample-environments.yaml` and customize `LLM_MODEL` + `LLM_API_BASE` for the model
-   you want this agent to use.
-3. Set `A2A_PUBLIC_URL` to the externally-reachable URL once you know the route.
+### Quick Deploy (CLI)
+
+The `deploy-to-kagenti.sh` script handles the full build + deploy pipeline:
+
+```bash
+cd a2a/kagenti_chat
+./deploy-to-kagenti.sh [namespace]   # defaults to team1
+```
+
+This script:
+
+1. Labels the namespace for shared gateway access
+2. Creates a Shipwright `Build` using `buildah-insecure-direct` strategy
+3. Triggers a `BuildRun` and waits for completion (typically 2-5 min)
+4. Deploys `Deployment`, `Service`, and `HTTPRoute`
+5. Waits for the pod to be ready
+
+**Prerequisites:**
+
+- Kagenti cluster with Shipwright installed
+- `buildah-insecure-direct` `ClusterBuildStrategy` available cluster-wide
+- Internal registry at `registry.cr-system` (ClusterIP `10.43.28.116:5000`)
+- k3s nodes configured with the registry as insecure
+- llm-d deployed with `Llama-3.3-70B-Instruct` model
+
+### Verifying the deployment
+
+```bash
+# Check the agent card
+curl -sk https://kagenti-chat.163-75-85-180.sslip.io/.well-known/agent-card.json | jq .
+
+# Send a chat message
+curl -sk -X POST https://kagenti-chat.163-75-85-180.sslip.io/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "1",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "role": "user",
+        "parts": [{"text": "Hello!"}],
+        "messageId": "test-1"
+      }
+    }
+  }' | jq -r '.result.artifacts[0].parts[0].text'
+```
+
+### Architecture notes
+
+The deployment uses these specific configurations to work around Kagenti cluster constraints:
+
+- **Image reference uses ClusterIP** (`10.43.28.116:5000`) instead of the registry's DNS name —
+  kubelet on the nodes can't resolve cluster-internal DNS names like
+  `registry.cr-system.svc.cluster.local`.
+- **HTTPRoute attaches to `kagenti-system/http` Gateway** rather than the llm-d gateway —
+  this is the gateway with both HTTP and HTTPS listeners exposed externally.
+- **Direct llm-d service URL** in `LLM_API_BASE` (not the gateway path) —
+  `http://ms-meta-llama-llama-3-3-70b-instruct-svc.llm-d.svc.cluster.local:8000/v1` —
+  avoids HTTP→HTTPS redirect issues from the gateway.
+- **`kagenti.io/inject: disabled`** label on pods skips the authbridge sidecar injection,
+  which would otherwise require a Keycloak client secret.
+
+### Manifest reference
+
+See `k8s/kagenti-deploy.yaml` for the full Deployment + Service + HTTPRoute manifest.
+
+### Alternative: Kagenti UI
+
+You can also deploy via the Kagenti UI under "Import New Agent". Select the `llm-d` env
+block from `sample-environments.yaml` and customize `LLM_MODEL` + `LLM_API_BASE` for the
+model you want this agent to use. Set `A2A_PUBLIC_URL` to the externally-reachable URL.
 
 ## Tracing
 
