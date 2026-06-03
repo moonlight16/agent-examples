@@ -19,6 +19,7 @@ from a2a.types import (
 )
 from a2a.utils import new_agent_text_message, new_task
 
+from kagenti_chat.a2a_server.auth import BearerAuthMiddleware
 from kagenti_chat.agent import ChatAgent
 from kagenti_chat.config import Settings
 
@@ -126,5 +127,12 @@ def create_app(settings: Settings) -> Any:
     )
     server = A2AStarletteApplication(agent_card=agent_card, http_handler=request_handler)
     app = server.build()
+
+    if settings.API_KEY:
+        app.add_middleware(BearerAuthMiddleware, api_key=settings.API_KEY)
+        logger.info("Bearer token authentication enabled")
+    else:
+        logger.warning("API_KEY not set — server is running without authentication")
+
     logger.info("A2A server application created")
     return app

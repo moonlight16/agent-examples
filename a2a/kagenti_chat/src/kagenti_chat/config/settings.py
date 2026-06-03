@@ -73,6 +73,14 @@ class Settings(BaseSettings):
         description="Print OpenTelemetry traces to stdout when no OTLP endpoint is configured",
     )
 
+    API_KEY: Optional[str] = Field(
+        default=os.getenv("API_KEY"),
+        description=(
+            "Bearer token required on all JSON-RPC requests. If unset, the server "
+            "runs without authentication. The /.well-known/* paths are always public."
+        ),
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

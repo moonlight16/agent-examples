@@ -70,7 +70,11 @@ def append_history(record: dict) -> None:
 
 
 async def fetch_agent_card(client: httpx.AsyncClient, url: str) -> dict:
-    """Try the modern path first, fall back to the deprecated one."""
+    """Try the modern path first, fall back to the deprecated one.
+
+    The agent card is intentionally unauthenticated, so this never sends the
+    bearer token.
+    """
     last_error: Exception | None = None
     for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
         try:
@@ -106,6 +110,7 @@ async def stream_message(
     url: str,
     user_input: str,
     context_id: str | None,
+    api_key: str | None = None,
 ) -> tuple[str, str | None]:
     """Send a message via JSON-RPC streaming. Returns (final_text, new_context_id)."""
     message_id = uuid4().hex
@@ -128,14 +133,20 @@ async def stream_message(
     new_context_id = context_id
     streaming_supported = True
 
+    headers = {"Accept": "text/event-stream"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     try:
         async with client.stream(
             "POST",
             f"{url}/",
             json=payload,
-            headers={"Accept": "text/event-stream"},
+            headers=headers,
             timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
         ) as response:
+            if response.status_code in (401, 403):
+                raise RuntimeError(_auth_error_message(response.status_code))
             content_type = response.headers.get("content-type", "")
             if "event-stream" not in content_type:
                 # Server doesn't actually stream; fall back to non-streaming
@@ -183,7 +194,13 @@ async def stream_message(
         return final_text, new_context_id
 
     # Fallback: non-streaming send
-    return await send_message(client, url, user_input, context_id, message_id)
+    return await send_message(client, url, user_input, context_id, api_key, message_id)
+
+
+def _auth_error_message(status_code: int) -> str:
+    if status_code == 401:
+        return "Authentication required (HTTP 401). Pass --api-key or set KAGENTI_CHAT_API_KEY."
+    return "API key rejected (HTTP 403). Check that your --api-key is correct."
 
 
 async def send_message(
@@ -191,6 +208,7 @@ async def send_message(
     url: str,
     user_input: str,
     context_id: str | None,
+    api_key: str | None = None,
     message_id: str | None = None,
 ) -> tuple[str, str | None]:
     payload = {
@@ -208,11 +226,18 @@ async def send_message(
     if context_id:
         payload["params"]["message"]["contextId"] = context_id
 
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     response = await client.post(
         f"{url}/",
         json=payload,
+        headers=headers,
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
     )
+    if response.status_code in (401, 403):
+        raise RuntimeError(_auth_error_message(response.status_code))
     response.raise_for_status()
     data = response.json()
 
@@ -239,7 +264,7 @@ async def send_message(
     return "(no response)", new_context_id
 
 
-async def chat_loop(url: str, insecure: bool, no_stream: bool) -> int:
+async def chat_loop(url: str, insecure: bool, no_stream: bool, api_key: str | None) -> int:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
     verify = not insecure
@@ -349,9 +374,9 @@ async def chat_loop(url: str, insecure: bool, no_stream: bool) -> int:
             try:
                 with console.status("[dim]Thinking...[/]", spinner="dots"):
                     if no_stream:
-                        text, context_id = await send_message(client, url, user_input, context_id)
+                        text, context_id = await send_message(client, url, user_input, context_id, api_key)
                     else:
-                        text, context_id = await stream_message(client, url, user_input, context_id)
+                        text, context_id = await stream_message(client, url, user_input, context_id, api_key)
             except KeyboardInterrupt:
                 console.print()
                 console.print("[dim](cancelled)[/]")
@@ -392,10 +417,15 @@ def main() -> None:
         action="store_true",
         help="Disable streaming responses",
     )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("KAGENTI_CHAT_API_KEY"),
+        help="Bearer token for authentication (env: KAGENTI_CHAT_API_KEY)",
+    )
     args = parser.parse_args()
 
     try:
-        sys.exit(asyncio.run(chat_loop(args.url, args.insecure, args.no_stream)))
+        sys.exit(asyncio.run(chat_loop(args.url, args.insecure, args.no_stream, args.api_key)))
     except KeyboardInterrupt:
         sys.exit(130)
 
