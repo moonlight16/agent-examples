@@ -2,9 +2,13 @@
 
 The graph has a single 'respond' node that either calls the configured
 LLM (when a valid API key is available) or runs in echo mode (returns
-the user input plus a turn counter). When CHECKPOINT_DB_URL is set,
-the graph uses AsyncPostgresSaver so state survives pod restarts;
-otherwise it uses MemorySaver.
+the user input plus a turn counter).
+
+The checkpointer is chosen from Configuration.checkpoint_path:
+  - a filesystem path (default /shared/checkpoints.db) -> AsyncSqliteSaver
+    with state persisted to that file. Point that path at a PVC mount
+    for durability across pod restarts.
+  - empty string -> MemorySaver (for tests / echo-only smoke checks).
 """
 
 from __future__ import annotations
@@ -26,17 +30,6 @@ SYSTEM_PROMPT = (
     "experiment. Be concise (one or two sentences) and acknowledge that "
     "you remember earlier turns when the user references them."
 )
-
-
-async def get_checkpointer(config: Configuration):
-    """Return a LangGraph checkpointer. Postgres if CHECKPOINT_DB_URL set, else MemorySaver."""
-    if config.checkpoint_db_url:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        cp = AsyncPostgresSaver.from_conn_string(config.checkpoint_db_url)
-        # AsyncPostgresSaver.from_conn_string returns an async context manager;
-        # the caller must use it as such. We return the cm so caller can manage.
-        return cp
-    return MemorySaver()
 
 
 def _echo_reply(state: MessagesState) -> dict[str, Any]:

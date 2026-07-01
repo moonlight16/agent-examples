@@ -1,20 +1,20 @@
 [project]
 name = "minimal-pvc-agent"
-version = "0.0.1"
-description = "Minimal A2A agent demonstrating Kagenti persistence (PVC + Postgres)."
+version = "0.2.0"
+description = "Minimal A2A agent demonstrating Kagenti persistence via harness-native SQLite on a PVC."
 license = { text = "Apache" }
 requires-python = ">=3.11"
 dependencies = [
     "a2a-sdk[http-server,sql]>=0.3.26,<1.0",
     "langgraph>=0.2.0",
-    "langgraph-checkpoint-postgres>=2.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
     "langchain-openai>=0.2.0",
     "langchain-core>=0.3.0",
     "openai>=1.0.0",
     "pydantic-settings>=2.0.0",
     "uvicorn>=0.46.0",
     "opentelemetry-exporter-otlp",
-    "asyncpg>=0.29.0",
+    "aiosqlite>=0.20.0",
     "sqlalchemy[asyncio]>=2.0.0",
 ]
 

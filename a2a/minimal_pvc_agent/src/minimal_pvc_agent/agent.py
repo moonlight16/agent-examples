@@ -1,8 +1,13 @@
 """A2A server entrypoint for the minimal PVC agent.
 
-Wires the LangGraph to the A2A protocol, persists per-turn JSONL to
-/shared, and exposes GET /history and GET /checkpoint endpoints so
-persistence can be verified without kubectl exec.
+Wires the LangGraph to the A2A protocol using the harness's own
+persistence primitives (LangGraph AsyncSqliteSaver, a2a-sdk
+DatabaseTaskStore over SQLite). Both save to files on /shared; when
+Kagenti mounts a PVC at /shared, agent state survives pod restarts.
+
+The agent code itself never handles persistence — that's the harness's
+job. The only knobs are two env vars (CHECKPOINT_PATH, TASK_STORE_PATH)
+that point the two components at files.
 """
 
 import logging
@@ -26,14 +31,13 @@ from starlette.routing import Route
 
 from minimal_pvc_agent.configuration import Configuration
 from minimal_pvc_agent.graph import build_graph
-from minimal_pvc_agent.persistence import append_turn, read_history
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _CONFIG = Configuration()
 _GRAPH = None
-_CHECKPOINTER_CM = None  # async context manager when using AsyncPostgresSaver
+_CHECKPOINTER_CM = None
 _CHECKPOINTER = None
 
 
@@ -43,18 +47,17 @@ async def _ensure_graph():
     if _GRAPH is not None:
         return _GRAPH
 
-    if _CONFIG.checkpoint_db_url:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        _CHECKPOINTER_CM = AsyncPostgresSaver.from_conn_string(_CONFIG.checkpoint_db_url)
+    path = _CONFIG.checkpoint_path
+    if path:
+        # Ensure parent dir exists (PVC mount is typically /shared with rwx)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        _CHECKPOINTER_CM = AsyncSqliteSaver.from_conn_string(path)
         _CHECKPOINTER = await _CHECKPOINTER_CM.__aenter__()
-        try:
-            await _CHECKPOINTER.setup()
-        except Exception as exc:
-            logger.warning("checkpointer setup failed: %s", exc)
-        logger.info("Using AsyncPostgresSaver checkpointer")
+        logger.info("LangGraph checkpointer: AsyncSqliteSaver at %s", path)
     else:
         _CHECKPOINTER = MemorySaver()
-        logger.info("Using MemorySaver checkpointer (no CHECKPOINT_DB_URL set)")
+        logger.info("LangGraph checkpointer: MemorySaver (CHECKPOINT_PATH unset)")
 
     _GRAPH = build_graph(_CONFIG, _CHECKPOINTER)
     return _GRAPH
@@ -65,7 +68,7 @@ def get_agent_card(host: str, port: int) -> AgentCard:
     skill = AgentSkill(
         id="minimal_pvc_chat",
         name="Minimal PVC Chat",
-        description="Minimal A2A chat agent for proving Kagenti persistence (PVC + Postgres).",
+        description="Minimal A2A chat agent demonstrating harness-native persistence on a Kagenti PVC.",
         tags=["minimal", "pvc", "persistence", "demo"],
         examples=["hello", "what did I just say?"],
     )
@@ -74,18 +77,23 @@ def get_agent_card(host: str, port: int) -> AgentCard:
         description=dedent(
             """\
             Minimal one-node LangGraph agent that demonstrates Kagenti
-            persistent context across pod restarts.
+            persistent context across pod restarts using the harness's
+            own persistence primitives (SQLite files on /shared).
 
             ## What it does
-            - Writes one JSONL line per turn to /shared/<context_id>.jsonl
-            - Uses LangGraph's checkpointer for conversation state
-              (MemorySaver by default, AsyncPostgresSaver if CHECKPOINT_DB_URL is set)
-            - GET /history?context_id=... returns the JSONL turn log
+            - LangGraph AsyncSqliteSaver at CHECKPOINT_PATH (default
+              /shared/checkpoints.db) persists conversation state.
+            - A2A DatabaseTaskStore at TASK_STORE_PATH (default
+              /shared/tasks.db) persists task metadata.
+            - Both files live on the PVC Kagenti mounts at /shared, so
+              deleting the pod and letting the StatefulSet recreate it
+              preserves the conversation history and task records.
             - GET /checkpoint?context_id=... returns the LangGraph state
+              for a given context, useful for inspection.
             """
         ),
         url=os.getenv("AGENT_ENDPOINT", f"http://{host}:{port}").rstrip("/") + "/",
-        version="0.1.0",
+        version="0.2.0",
         default_input_modes=["text"],
         default_output_modes=["text"],
         capabilities=capabilities,
@@ -126,14 +134,6 @@ class MinimalPVCExecutor(AgentExecutor):
             )
             return
 
-        append_turn(
-            Path(_CONFIG.context_dir),
-            task.context_id,
-            task.id,
-            user_input,
-            reply,
-        )
-
         await task_updater.add_artifact([TextPart(text=reply)])
         await task_updater.update_status(
             TaskState.input_required,
@@ -145,20 +145,16 @@ class MinimalPVCExecutor(AgentExecutor):
 
 
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "context_dir": _CONFIG.context_dir})
+    return JSONResponse({
+        "status": "ok",
+        "checkpoint_path": _CONFIG.checkpoint_path,
+        "task_store_path": _CONFIG.task_store_path,
+    })
 
 
 async def agent_card_compat(request: Request) -> JSONResponse:
     card = get_agent_card(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
     return JSONResponse(card.model_dump(mode="json", exclude_none=True))
-
-
-async def history(request: Request) -> JSONResponse:
-    context_id = request.query_params.get("context_id")
-    if not context_id:
-        return JSONResponse({"error": "context_id is required"}, status_code=400)
-    records = read_history(Path(_CONFIG.context_dir), context_id)
-    return JSONResponse({"context_id": context_id, "turns": records})
 
 
 async def checkpoint(request: Request) -> JSONResponse:
@@ -167,7 +163,6 @@ async def checkpoint(request: Request) -> JSONResponse:
         return JSONResponse({"error": "context_id is required"}, status_code=400)
     graph = await _ensure_graph()
     state = await graph.aget_state({"configurable": {"thread_id": context_id}})
-    # state.values contains a MessagesState dict; messages are LangChain objects
     messages = state.values.get("messages", []) if state else []
     out = [
         {"type": getattr(m, "type", type(m).__name__), "content": getattr(m, "content", str(m))}
@@ -175,21 +170,23 @@ async def checkpoint(request: Request) -> JSONResponse:
     ]
     return JSONResponse({
         "context_id": context_id,
-        "checkpointer": "postgres" if _CONFIG.checkpoint_db_url else "memory",
+        "checkpointer": "sqlite" if _CONFIG.checkpoint_path else "memory",
+        "checkpoint_path": _CONFIG.checkpoint_path,
         "messages": out,
     })
 
 
 def _build_task_store():
-    """Return a DatabaseTaskStore when TASK_STORE_DB_URL is set, else InMemoryTaskStore."""
-    dsn = _CONFIG.task_store_db_url
-    if not dsn:
-        logger.info("Using InMemoryTaskStore (no TASK_STORE_DB_URL set)")
+    """DatabaseTaskStore over SQLite when TASK_STORE_PATH is set, else InMemoryTaskStore."""
+    path = _CONFIG.task_store_path
+    if not path:
+        logger.info("A2A task store: InMemoryTaskStore (TASK_STORE_PATH unset)")
         return InMemoryTaskStore()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     from a2a.server.tasks import DatabaseTaskStore
     from sqlalchemy.ext.asyncio import create_async_engine
-    engine = create_async_engine(dsn)
-    logger.info("Using DatabaseTaskStore with DSN host=%s", dsn.split("@")[-1].split("/")[0])
+    engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+    logger.info("A2A task store: DatabaseTaskStore (sqlite) at %s", path)
     return DatabaseTaskStore(engine=engine)
 
 
@@ -210,9 +207,7 @@ def run():
 
     app = server.build()
 
-    # Add custom routes
     app.routes.insert(0, Route("/health", health, methods=["GET"]))
-    app.routes.insert(0, Route("/history", history, methods=["GET"]))
     app.routes.insert(0, Route("/checkpoint", checkpoint, methods=["GET"]))
     app.routes.insert(0, Route("/.well-known/agent-card.json", agent_card_compat, methods=["GET"]))
 
