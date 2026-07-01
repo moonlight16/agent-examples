@@ -64,7 +64,7 @@ async def _ensure_graph():
 
 
 def get_agent_card(host: str, port: int) -> AgentCard:
-    capabilities = AgentCapabilities(streaming=False)
+    capabilities = AgentCapabilities(streaming=True)
     skill = AgentSkill(
         id="minimal_pvc_chat",
         name="Minimal PVC Chat",
@@ -93,7 +93,7 @@ def get_agent_card(host: str, port: int) -> AgentCard:
             """
         ),
         url=os.getenv("AGENT_ENDPOINT", f"http://{host}:{port}").rstrip("/") + "/",
-        version="0.2.0",
+        version="0.3.0",
         default_input_modes=["text"],
         default_output_modes=["text"],
         capabilities=capabilities,
@@ -115,13 +115,44 @@ class MinimalPVCExecutor(AgentExecutor):
         graph = await _ensure_graph()
         thread_cfg = {"configurable": {"thread_id": task.context_id}}
 
+        # Emit an initial "thinking" status update so streaming clients see
+        # progress before the graph starts producing events.
+        await task_updater.update_status(
+            TaskState.working,
+            new_agent_text_message(
+                "thinking...",
+                task_updater.context_id,
+                task_updater.task_id,
+            ),
+        )
+
+        reply = ""
         try:
-            result = await graph.ainvoke(
+            async for event in graph.astream(
                 {"messages": [HumanMessage(content=user_input)]},
                 config=thread_cfg,
-            )
-            reply_msg = result["messages"][-1]
-            reply = getattr(reply_msg, "content", str(reply_msg))
+                stream_mode="updates",
+            ):
+                # Each event is a dict of {node_name: state_update}. Summarize
+                # each node's update as a working status message, capped at
+                # 256 chars to avoid unwieldy status messages.
+                summary = "\n".join(
+                    f"{key}: {str(value)[:256] + '...' if len(str(value)) > 256 else str(value)}"
+                    for key, value in event.items()
+                )
+                await task_updater.update_status(
+                    TaskState.working,
+                    new_agent_text_message(
+                        summary,
+                        task_updater.context_id,
+                        task_updater.task_id,
+                    ),
+                )
+                # Track the final reply from the last node update.
+                for value in event.values():
+                    if isinstance(value, dict) and value.get("messages"):
+                        last_msg = value["messages"][-1]
+                        reply = getattr(last_msg, "content", str(last_msg))
         except Exception as exc:
             logger.exception("graph invocation failed: %s", exc)
             await task_updater.update_status(

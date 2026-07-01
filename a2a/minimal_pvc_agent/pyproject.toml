@@ -1,6 +1,6 @@
 [project]
 name = "minimal-pvc-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Minimal A2A agent demonstrating Kagenti persistence via harness-native SQLite on a PVC."
 license = { text = "Apache" }
 requires-python = ">=3.11"
