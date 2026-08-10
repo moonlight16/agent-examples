@@ -1,0 +1,25 @@
+[project]
+name = "pi-agent-runtime"
+version = "0.1.0"
+description = "A generic A2A wrapper for the Pi coding agent"
+requires-python = ">=3.11"
+dependencies = [
+  "a2a-sdk[http-server]>=0.3.22,<1.0",
+  "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+pi-agent-runtime = "pi_agent_runtime.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pi_agent_runtime"]
