@@ -49,7 +49,7 @@ def build_app() -> object:
         version="0.1.0",
         default_input_modes=["text"],
         default_output_modes=["text"],
-        capabilities=AgentCapabilities(streaming=False),
+        capabilities=AgentCapabilities(streaming=True),
         skills=[
             AgentSkill(
                 id="general-coding-agent",
